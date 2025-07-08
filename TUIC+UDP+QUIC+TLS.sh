@@ -154,8 +154,57 @@ echo "tcp_bbr" >> /etc/modules-load.d/modules.conf
 sysctl -w net.ipv4.tcp_congestion_control=bbr || true
 tc qdisc add dev eth0 root fq || true
 
-# 获取服务器IP
-IP=$(ip route get 1 | awk '{print $NF; exit}')
+# 获取服务器IP - 多种方法尝试
+get_server_ip() {
+    local ip=""
+    
+    # 方法1: 通过路由表获取
+    ip=$(ip route get 1 2>/dev/null | awk '{print $NF; exit}' 2>/dev/null)
+    if [[ -n "$ip" && "$ip" != "0" && "$ip" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+        echo "$ip"
+        return 0
+    fi
+    
+    # 方法2: 通过默认路由接口获取
+    local default_iface=$(ip route | grep '^default' | awk '{print $5}' | head -n1)
+    if [[ -n "$default_iface" ]]; then
+        ip=$(ip addr show "$default_iface" | grep 'inet ' | grep -v '127.0.0.1' | awk '{print $2}' | cut -d/ -f1 | head -n1)
+        if [[ -n "$ip" && "$ip" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "$ip"
+            return 0
+        fi
+    fi
+    
+    # 方法3: 通过外部服务获取公网IP
+    ip=$(curl -s --connect-timeout 5 https://ipv4.icanhazip.com 2>/dev/null)
+    if [[ -n "$ip" && "$ip" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+        echo "$ip"
+        return 0
+    fi
+    
+    # 方法4: 通过另一个外部服务
+    ip=$(curl -s --connect-timeout 5 https://api.ipify.org 2>/dev/null)
+    if [[ -n "$ip" && "$ip" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+        echo "$ip"
+        return 0
+    fi
+    
+    # 方法5: 通过hostname -I获取
+    ip=$(hostname -I 2>/dev/null | awk '{print $1}')
+    if [[ -n "$ip" && "$ip" != "127.0.0.1" && "$ip" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+        echo "$ip"
+        return 0
+    fi
+    
+    # 如果所有方法都失败，返回空
+    echo ""
+    return 1
+}
+
+IP=$(get_server_ip)
+if [[ -z "$IP" ]]; then
+    err "无法获取服务器IP地址，请检查网络连接"
+fi
 log "检测到服务器IP: $IP"
 
 # 执行速度测试
@@ -193,9 +242,15 @@ chmod 644 "$TLS_DIR/cert.crt"
 
 log "写入 TUIC 配置文件..."
 mkdir -p "$CFG_DIR"
+
+# 验证IP地址格式
+if [[ ! "$IP" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+    err "IP地址格式无效: $IP"
+fi
+
 cat > "$CFG_DIR/config.json" <<EOF
 {
-  "server": "${IP}:$PORT",
+  "server": "0.0.0.0:$PORT",
   "users": {
     "$UUID": "$PSK"
   },
@@ -213,6 +268,8 @@ cat > "$CFG_DIR/config.json" <<EOF
   "log_level": "debug"
 }
 EOF
+
+log "TUIC配置文件已生成，服务器监听所有接口: 0.0.0.0:${PORT}"
 
 log "创建 systemd 服务..."
 cat > /etc/systemd/system/tuic.service <<EOF
@@ -238,12 +295,22 @@ ufw --force enable
 
 systemctl daemon-reload
 systemctl enable --now tuic
-sleep 3
+sleep 5
 
+# 检查服务状态并提供详细错误信息
 if systemctl is-active --quiet tuic; then
   log "TUIC 启动成功 ✅"
 else
-  err "TUIC 启动失败，请执行: journalctl -u tuic -n 30"
+  echo -e "${RED}[ERROR]${NC} TUIC 启动失败"
+  echo -e "${YELLOW}服务状态:${NC}"
+  systemctl status tuic --no-pager
+  echo -e "${YELLOW}最近日志:${NC}"
+  journalctl -u tuic -n 20 --no-pager
+  echo -e "${YELLOW}配置文件内容:${NC}"
+  cat "$CFG_DIR/config.json"
+  echo -e "${YELLOW}端口占用情况:${NC}"
+  netstat -tlnp | grep ":$PORT " || echo "端口 $PORT 未被占用"
+  err "TUIC 启动失败，请检查上述信息"
 fi
 
 ENCODE=$(echo -n "${UUID}:${PSK}" | base64 -w 0)
