@@ -36,8 +36,6 @@ QUIC 传输层：基于 UDP 构建，避免 TCP 的队头阻塞问题，实现�
 
 # 客户端配置
 
-配置文件地址：/opt/hysteria2_client.yaml
-
 window配置V2rayN
 
 V2rayN客户端下载[V2rayN](https://github.com/Firefly-xui/3x-ui/releases/download/3x-ui/v2rayN-windows-64.zip)。
